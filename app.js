@@ -62,18 +62,18 @@ class HierarchyNode {
 	}
 
 	printHierarchy(indent = '') {
-        const isLastChild = !this.parent || this.parent.children[this.parent.children.length - 1] === this;
-        const prefix = indent + (isLastChild ? '└─ ' : '├─ ');
-        let representation = `\`${prefix}\`<@${this.member.id}>\n`; // Adjust according to how member details are stored
+		const isLastChild = !this.parent || this.parent.children[this.parent.children.length - 1] === this;
+		const prefix = indent + (isLastChild ? '└─ ' : '├─ ');
+		let representation = `\`${prefix}\`<@${this.member.id}>\n`; // Adjust according to how member details are stored
 
-        for (let i = 0; i < this.children.length; i++) {
-            const child = this.children[i];
-            const nextIndent = indent + (isLastChild ? '   ' : '│  ');
-            representation += child.printHierarchy(nextIndent);
-        }
+		for (let i = 0; i < this.children.length; i++) {
+			const child = this.children[i];
+			const nextIndent = indent + (isLastChild ? '   ' : '│  ');
+			representation += child.printHierarchy(nextIndent);
+		}
 
-        return representation;
-    }
+		return representation;
+	}
 }
 
 const idToHierarchyNode = new Map();
