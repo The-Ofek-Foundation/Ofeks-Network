@@ -10,8 +10,10 @@ const client = new Discord.Client({
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = '1181322376957407242';
-const CLIENT_ID = '1181338959285075981';
-const ADMIN_ROLE_ID = '1181347796234805338';
+const PERFORMANCE_CHART_CHANNEL_ID = '1181830899504001074';
+const PERFORMANCE_CHART_MESSAGE_ID = '1182090580348645436';
+const ORG_CHART_CHANNEL_ID = '1182131401047429240';
+const ORG_CHART_MESSAGE_ID = '1182131704534667384';
 const DEFAULT_ROLES = [];
 
 const inviteMap = new Map();
@@ -32,12 +34,12 @@ class HierarchyNode {
 	}
 
 	async backpropagateSponsored(personal = true) {
-		this.member.roles.remove(await getOrCreateRoleByIndex(this.member.guild, 'Downline', this.downline));
-		this.member.roles.add(await getOrCreateRoleByIndex(this.member.guild, 'Downline', ++this.downline));
+		await this.member.roles.remove(await getOrCreateRoleByIndex(this.member.guild, 'Downline', this.downline));
+		await this.member.roles.add(await getOrCreateRoleByIndex(this.member.guild, 'Downline', ++this.downline));
 	
 		if (personal) {
-			this.member.roles.remove(await getOrCreateRoleByIndex(this.member.guild, 'Personally Sponsored', this.children.length - 1));
-			this.member.roles.add(await getOrCreateRoleByIndex(this.member.guild, 'Personally Sponsored', this.children.length));
+			await this.member.roles.remove(await getOrCreateRoleByIndex(this.member.guild, 'Personally Sponsored', this.children.length - 1));
+			await this.member.roles.add(await getOrCreateRoleByIndex(this.member.guild, 'Personally Sponsored', this.children.length));
 		}
 
 		if (this.parent) this.parent.backpropagateSponsored(false);
@@ -58,6 +60,20 @@ class HierarchyNode {
 		for (const child of this.children)
 			child.print();
 	}
+
+	printHierarchy(indent = '') {
+        const isLastChild = !this.parent || this.parent.children[this.parent.children.length - 1] === this;
+        const prefix = indent + (isLastChild ? '└─ ' : '├─ ');
+        let representation = `\`${prefix}\`<@${this.member.id}>\n`; // Adjust according to how member details are stored
+
+        for (let i = 0; i < this.children.length; i++) {
+            const child = this.children[i];
+            const nextIndent = indent + (isLastChild ? '   ' : '│  ');
+            representation += child.printHierarchy(nextIndent);
+        }
+
+        return representation;
+    }
 }
 
 const idToHierarchyNode = new Map();
@@ -71,7 +87,7 @@ const getRoleByName = async (guild, name) => {
 	return roles.find(role => role.name === name);
 }
 
-const getAndSetUpdatedInvite = async (guild) => {
+const getAndSetUpdatedInvite = async guild => {
 	const invites = await guild.invites.fetch();
 	const invite = invites.find(invite => {
 		const cachedInvite = inviteMap.get(invite.code);
@@ -111,7 +127,7 @@ const getMemberRoleValue = (member, roleType) => {
 	return -1;
 }
 
-const getMemberParentId = (member) => {
+const getMemberParentId = member => {
 	for (const role of member.roles.cache.values())
 		if (role.name.startsWith('Parent'))
 			return role.name.split(' ')[1];
@@ -192,6 +208,75 @@ const refresh = async () => {
 	}
 
 	root.print();
+	await updatePerformanceChart(guild);
+	
+	const channel = await guild.channels.fetch(ORG_CHART_CHANNEL_ID);
+	const message = await channel.messages.fetch(ORG_CHART_MESSAGE_ID);
+
+	await message.edit(root.printHierarchy());
+	console.log('Org chart updated!');
+};
+
+const updatePerformanceChart = async guild => {
+	const members = await guild.members.fetch();
+	const categories = ['Downline', 'Personally Sponsored', 'Instructed', 'BFS'];
+	const memberMaps = new Map(categories.map(category => [category, new Map()]));
+
+	for (const member of members.values()) {
+		if (member.user.bot) continue;
+
+		categories.forEach(category => {
+			const value = getMemberRoleValue(member, category);
+			if (!memberMaps.get(category).has(value))
+				memberMaps.get(category).set(value, []);
+			memberMaps.get(category).get(value).push(member);
+		});
+	}
+
+	const channel = await guild.channels.fetch(PERFORMANCE_CHART_CHANNEL_ID);
+
+	const embeds = [];
+	const images = [];
+
+	for (const category of categories) {
+		const attachmentPath = `${category}.png`.replace(/ /g, '-');
+
+		const embed = new Discord.EmbedBuilder()
+			.setTitle(`${category} Leaderboard`)
+			.setDescription(`This is the current leaderboard for **${category}**.`)
+			.setColor(0x1ABC9C)
+			.setTimestamp()
+			.setFooter({ text: 'Last updated', iconUrl: `attachment://${attachmentPath}` })
+			.setThumbnail(`attachment://${attachmentPath}`);
+
+		// Sort members; if BFS, sort from min to max, else max to min
+		const sortedMembers = [...memberMaps.get(category).entries()]
+			.sort((a, b) => category === 'BFS' ? a[0] - b[0] : b[0] - a[0]);
+
+		for (const [value, members] of sortedMembers) {
+			const memberString = members.map(member => `<@${member.id}>`).join('\n');
+			embed.addFields({ name: `Level ${value}`, value: memberString || 'No members', inline: true });
+		}
+
+		embeds.push(embed);
+		images.push(new Discord.AttachmentBuilder(`images/${category}.png`, { name: `${attachmentPath}` }));
+
+		// const message = await channel.messages.fetch(PERFORMANCE_CHART_MESSAGE_IDS.get(category));
+		// await message.edit({
+		// 	content: '🏆 **Leaderboard Update!** 🏆',
+		// 	embeds: [embed],
+		// 	files: [imageAttachment]
+		// });
+	}
+
+	const message = await channel.messages.fetch(PERFORMANCE_CHART_MESSAGE_ID);
+	await message.edit({
+		content: '🏆 **Leaderboard Update!** 🏆',
+		embeds: embeds,
+		files: images,
+	});
+
+	console.log('All leaderboards updated!');
 };
 
 client.on('ready', async () => {	
@@ -203,20 +288,21 @@ client.on('ready', async () => {
 client.on('guildMemberAdd', async member => {
 	console.log(`New member ${member.user.tag} has joined the server!`);
 
-	member.roles.add(DEFAULT_ROLES);
+	await member.roles.add(DEFAULT_ROLES);
 
 	const updatedInvite = await getAndSetUpdatedInvite(member.guild);
 	const parentId = updatedInvite.inviter.id;
 	const parentNode = idToHierarchyNode.get(parentId);
 	
-	member.roles.add(await getOrCreateParentRole(member.guild, parentId));
+	await member.roles.add(await getOrCreateParentRole(member.guild, parentId));
 
 	const node = new HierarchyNode(member, parentNode.level + 1, parentNode);
 	parentNode.addChild(node);
 
-	member.roles.add(await getOrCreateRoleByIndex(member.guild, 'BFS', parentNode.level + 1));
+	await member.roles.add(await getOrCreateRoleByIndex(member.guild, 'BFS', parentNode.level + 1));
 
 	await parentNode.backpropagateSponsored();
+	await updatePerformanceChart(member.guild);
 });
 
 client.on('inviteCreate', async invite => {
@@ -252,11 +338,12 @@ client.on('interactionCreate', async interaction => {
 					return;
 				}
 
-				member.roles.remove(await getOrCreateRoleByIndex(member.guild, 'Instructed', instructed));
-				member.roles.add(await getOrCreateRoleByIndex(member.guild, 'Instructed', instructed + 1));
+				await member.roles.remove(await getOrCreateRoleByIndex(member.guild, 'Instructed', instructed));
+				await member.roles.add(await getOrCreateRoleByIndex(member.guild, 'Instructed', instructed + 1));
 
-				console.log(`Instructed incremented to ${instructed + 1}!`);
-				await interaction.reply(`Instructed incremented to ${instructed + 1}!`);
+				console.log(`Instructed incremented to ${instructed + 1} for ${member.displayName}!`);
+				await interaction.reply(`Instructed incremented to ${instructed + 1} for ${member.displayName}!`);
+				await updatePerformanceChart(member.guild);
 				break;
 			}
 		
@@ -270,11 +357,12 @@ client.on('interactionCreate', async interaction => {
 					return;
 				}
 
-				member.roles.remove(await getOrCreateRoleByIndex(member.guild, 'Instructed', instructed));
-				member.roles.add(await getOrCreateRoleByIndex(member.guild, 'Instructed', instructed - 1));
+				await member.roles.remove(await getOrCreateRoleByIndex(member.guild, 'Instructed', instructed));
+				await member.roles.add(await getOrCreateRoleByIndex(member.guild, 'Instructed', instructed - 1));
 
-				console.log(`Instructed decremented to ${instructed - 1}!`);
-				await interaction.reply(`Instructed decremented to ${instructed - 1}!`);
+				console.log(`Instructed decremented to ${instructed - 1} for ${member.displayName}!`);
+				await interaction.reply(`Instructed decremented to ${instructed - 1} for ${member.displayName}!`);
+				await updatePerformanceChart(member.guild);
 				break;
 			}
 
@@ -282,35 +370,3 @@ client.on('interactionCreate', async interaction => {
 });
 
 client.login(TOKEN);
-
-const { REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
-
-const commands = [
-    new SlashCommandBuilder()
-        .setName('refresh')
-        .setDescription('Refreshes the server data.')
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator), // Restrict to admins only
-	new SlashCommandBuilder()
-        .setName('incrementinstructed')
-        .setDescription('Increments the instructed count.'),
-    new SlashCommandBuilder()
-        .setName('decrementinstructed')
-        .setDescription('Decrements the instructed count.'),
-].map(command => command.toJSON());
-
-const rest = new REST({ version: '10' }).setToken(TOKEN);
-
-(async () => {
-    try {
-        console.log('Started refreshing application (/) commands.');
-
-        await rest.put(
-            Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-            { body: commands },
-        );
-
-        console.log('Successfully reloaded application (/) commands.');
-    } catch (error) {
-        console.error(error);
-    }
-})();
